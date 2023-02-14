@@ -5,7 +5,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import math
-
+import time
 def parse_args(parser: argparse.ArgumentParser):
     parser.add_argument('mesh_filepath', type=str, help='The path to the mesh that you\'d like to get points for')
     parser.add_argument('texture_path', type=str, help='The path to the texture for the mesh')
@@ -52,54 +52,65 @@ if __name__ == '__main__':
 
     viewer = my_mesh.show()
 
-    for i in range(-20, 40, 1):
-        my_mesh.rotate_vertices(compute_rotation_matrix(math.radians(i)))
-        
-        # Update the meshviewer after rotating the mesh
-        my_mesh.show(mv=viewer)
-        snapshot_name = f'{args.output_folder}/mesh_view_{i}.png'
-        viewer.save_snapshot(snapshot_name)
-        
-        landmarks = compute_landmarks_for_image(snapshot_name)
-        
-        #mesh_raw_lndmks = [[lndmk.x, -lndmk.y, lndmk.z] for lndmk in landmarks.landmark]
+    # Update the meshviewer after rotating the mesh
+    my_mesh.show(mv=viewer)
+    snapshot_name = f'{args.output_folder}/mesh_view.png'
+    viewer.save_snapshot(snapshot_name)
+    
+    landmarks = compute_landmarks_for_image(snapshot_name)
+    
+    #mesh_raw_lndmks = [[lndmk.x, -lndmk.y, lndmk.z] for lndmk in landmarks.landmark]
 
-        #my_mesh.set_landmarks_from_xyz(mesh_raw_lndmks)
+    #my_mesh.set_landmarks_from_xyz(mesh_raw_lndmks)
 
-        #my_mesh.show(mv=viewer)
-        
-        # Setup mediapipe drawing tools
-        mp_face_mesh = mp.solutions.face_mesh
-        mp_drawing = mp.solutions.drawing_utils
-        mp_drawing_styles = mp.solutions.drawing_styles
+    #my_mesh.show(mv=viewer)
+    
+    # Setup mediapipe drawing tools
+    mp_face_mesh = mp.solutions.face_mesh
+    mp_drawing = mp.solutions.drawing_utils
+    mp_drawing_styles = mp.solutions.drawing_styles
 
-        annotated_image = cv2.imread(snapshot_name)
-        
-        mp_drawing.draw_landmarks(
+    annotated_image = cv2.imread(snapshot_name)
+    
+    mp_drawing.draw_landmarks(
+      image=annotated_image,
+      landmark_list=landmarks,
+      connections=mp_face_mesh.FACEMESH_TESSELATION,
+      landmark_drawing_spec=None,
+      connection_drawing_spec=mp_drawing_styles
+      .get_default_face_mesh_tesselation_style())
+    mp_drawing.draw_landmarks(
           image=annotated_image,
           landmark_list=landmarks,
-          connections=mp_face_mesh.FACEMESH_TESSELATION,
+          connections=mp_face_mesh.FACEMESH_CONTOURS,
           landmark_drawing_spec=None,
           connection_drawing_spec=mp_drawing_styles
-          .get_default_face_mesh_tesselation_style())
-        mp_drawing.draw_landmarks(
-              image=annotated_image,
-              landmark_list=landmarks,
-              connections=mp_face_mesh.FACEMESH_CONTOURS,
-              landmark_drawing_spec=None,
-              connection_drawing_spec=mp_drawing_styles
-              .get_default_face_mesh_contours_style())
-        mp_drawing.draw_landmarks(
-              image=annotated_image,
-              landmark_list=landmarks,
-              connections=mp_face_mesh.FACEMESH_IRISES,
-              landmark_drawing_spec=None,
-              connection_drawing_spec=mp_drawing_styles
-              .get_default_face_mesh_iris_connections_style())
-        cv2.imwrite(f'{args.output_folder}/media_pipe_view_{i}.png', annotated_image)
+          .get_default_face_mesh_contours_style())
+    mp_drawing.draw_landmarks(
+          image=annotated_image,
+          landmark_list=landmarks,
+          connections=mp_face_mesh.FACEMESH_IRISES,
+          landmark_drawing_spec=None,
+          connection_drawing_spec=mp_drawing_styles
+          .get_default_face_mesh_iris_connections_style())
+    cv2.imwrite(f'{args.output_folder}/media_pipe_view.png', annotated_image)
+    
+    landmark_holder = []
+    for i, landmark in enumerate(landmarks.landmark):
+        x = landmark.x
+        y = landmark.y
+        z = landmark.z
         
-        viewer.cast_point(.5, .5)
-        # Rotate the mesh back for the next computation
-        my_mesh.rotate_vertices(compute_rotation_matrix(math.radians(-i)))
+        print(x, y, z)
+    #x, y, z = viewer.get_intersecting_point(-.5, .1)
+        new_x, new_y, new_z = viewer.get_intersecting_point(x, y)
+        print(f'New x: {new_x}, New y: {new_y}, New z: {new_z}')
+        landmark_holder.append((new_x, new_y, new_z))
 
-    viewer.close()
+    my_mesh.set_landmarks_from_xyz(landmark_holder)
+
+    my_mesh.show(mv=viewer)
+    # Rotate the mesh back for the next computation
+    #my_mesh.rotate_vertices(compute_rotation_matrix(math.radians(-i)))
+
+    #viewer.close()

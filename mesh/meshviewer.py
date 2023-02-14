@@ -50,6 +50,7 @@ from OpenGL import GL, GLU, GLUT
 from OpenGL.arrays.vbo import VBO
 from PIL import Image
 import zmq
+from typing import List
 
 # if this file is processed/run as a python script/standalone, especially from the
 # internal command
@@ -278,19 +279,11 @@ class MeshSubwindow:
     def close(self):
         self.parent_window.p.terminate()
 
-    def cast_point(self, x_point, y_point):
+    def get_intersecting_point(self, normalized_x: float, normalized_y: float):
         """
         Casts a point from the window into the scene
         """
-        window_height = GLUT.glutGet(GLUT.GLUT_WINDOW_HEIGHT)
-        depth_value = GL.glReadPixels(x_point, window_height - y_point, 1, 1, GL.GL_DEPTH_COMPONENT, GL.GL_FLOAT)
-        camera = self.on_draw(want_cameras=True)[0]
-        xx, yy, zz = GLU.gluUnProject(
-            cursor_x, window_height - y_point, depth_value,
-            camera['modelview_matrix'],
-            camera['projection_matrix'],
-            camera['viewport'])
-        print(f'Point {xx}, {yy}, {zz}')
+        return self.parent_window.get_intersecting_point(normalized_x, normalized_y)
 
     background_color = property(fset=set_background_color, doc="Background color, as 3-element numpy array where 0 <= color <= 1.0.")
     dynamic_meshes = property(fset=set_dynamic_meshes, doc="List of meshes for dynamic display.")
@@ -797,7 +790,7 @@ class MeshViewerLocal:
                 min_port=ZMQ_PORT_MIN,
                 max_port=ZMQ_PORT_MAX,
                 max_tries=100000)
-
+            print(port)
             # sending with blocking'
             self.client.send_pyobj({
                 'label': label,
@@ -817,7 +810,7 @@ class MeshViewerLocal:
                 'which_window': which_window
             })
 
-    def _recv_pyobj(self, label, port=None):
+    def _recv_pyobj(self, label, port=None, obj=None):
         context = zmq.Context.instance()
         server = context.socket(zmq.PULL)
         server.linger = 0
@@ -828,8 +821,16 @@ class MeshViewerLocal:
                 min_port=ZMQ_PORT_MIN,
                 max_port=ZMQ_PORT_MAX,
                 max_tries=100000)
+            print(port)
+        """
+        Normally, this function just sends the port and awaits a response, but we may want to send extra data with it.
+        This conditional adds additional information to the payload that the remote viewer can parse out.
+        """
+        if obj: # Given an object, send the whole payload
+            self._send_pyobj(label, {'port':port, 'obj':obj}, blocking=True, which_window=(0, 0))
+        else: # Otherwise, just send the port, so we don't have to change the whole codebase
+            self._send_pyobj(label, port, blocking=True, which_window=(0, 0))
 
-        self._send_pyobj(label, port, blocking=True, which_window=(0, 0))
         result = server.recv_pyobj()
         server.close()
 
@@ -884,6 +885,14 @@ class MeshViewerLocal:
     def get_window_shape(self):
         response = self._recv_pyobj("get_window_shape")
         return response["shape"]
+    
+    def get_intersecting_point(self, normalized_x: float, normalized_y: float) -> List[float]:
+        """
+        Given a 2D point in normalized coordinates [-1.0, 1.0], get the 3D point that intersects the mesh
+        """
+        point_3d = self._recv_pyobj('get_intersecting_point', port=None, obj=[normalized_x, normalized_y])
+
+        return (point_3d['x'], point_3d['y'], point_3d['z'])
 
     background_color = property(fset=set_background_color,
                                 doc="Background color, as 3-element numpy array where 0 <= color <= 1.0.")
@@ -1133,6 +1142,45 @@ class MeshViewerRemote:
         client.send_pyobj(pyobj)
         del self.mouseclick_port
 
+    def get_intersecting_point(self, image_normalized_x: float, image_normalized_y: float):
+        """
+        This function takes in normalized coordinates from [-1.0, 1.0] in an image and returns the 3D point where a ray
+        from this location would intersect with the mesh.
+        """
+        
+        # Setup communication things
+        window_height = GLUT.glutGet(GLUT.GLUT_WINDOW_HEIGHT)
+        window_width = GLUT.glutGet(GLUT.GLUT_WINDOW_WIDTH)
+        
+        window_x_coord = int(((window_width / 2) * image_normalized_x) + (window_width / 2))
+        window_y_coord = int(((window_height / 2) * image_normalized_y) + (window_height / 2))
+
+        client = zmq.Context.instance().socket(zmq.PUSH)
+        client.connect('{}://{}:{}'.format(ZMQ_TRANSPORT, ZMQ_HOST, self.intersecting_port))
+
+        # We'll just assume a single camera for now
+        camera = self.on_draw(want_cameras=True)[0][0]
+
+        # Compute the depth value where we hit the mesh
+        depth_value = GL.glReadPixels(window_x_coord, window_y_coord, 1, 1, GL.GL_DEPTH_COMPONENT, GL.GL_FLOAT)
+
+        if depth_value == 1:
+            depth_value = .2
+        
+        # Get the 3D intersection point
+        xx, yy, zz = GLU.gluUnProject(
+            window_x_coord, window_y_coord, depth_value,
+            camera['modelview_matrix'],
+            camera['projection_matrix'],
+            camera['viewport'])
+
+        pyobj = {
+            'x': xx, 'y': yy, 'z': zz
+        }
+        
+        client.send_pyobj(pyobj)
+        del self.intersecting_port
+
     def on_draw(self, want_cameras=False):
         # sys.stderr.write('fps: %.2e\n' % (1. / (time.time() - self.tm_for_fps)))
         self.tm_for_fps = time.time()
@@ -1168,7 +1216,7 @@ class MeshViewerRemote:
         mv = self.mesh_viewers[w[0]][w[1]]
 
         logging.debug("received a request: {}".format(request))
-
+        print("received a request: {}".format(request))
         # Handle each type of request.
         # Some requests require a redraw, and
         # some don't.
@@ -1211,12 +1259,15 @@ class MeshViewerRemote:
             self.event_port = obj
         elif label == 'get_window_shape':
             self.send_window_shape(obj)
+        elif label == 'get_intersecting_point':
+            self.intersecting_port = obj['port']
+            self.get_intersecting_point(obj['obj'][0], obj['obj'][1])
         else:
             return False  # can't handle this request string
 
         return True  # handled the request string
 
-    def checkQueue(self, unused_timer_id):
+    def checkQueue(self):
         GLUT.glutTimerFunc(20, self.checkQueue, 0)
 
         try:
@@ -1228,7 +1279,8 @@ class MeshViewerRemote:
 
         if not request:
             return
-
+        
+        """
         while (request):
             task_completion_time = time.time()
             if not self.handle_request(request):
@@ -1249,6 +1301,24 @@ class MeshViewerRemote:
 
         if self.need_redraw:
             GLUT.glutPostRedisplay()
+        """
+
+        task_completion_time = time.time()
+
+        if not self.handle_request(request):
+            raise Exception('Unknown command string: %s' % (request['label']))
+
+        task_completion_time = time.time() - task_completion_time
+
+        if 'port' in request:  # caller wants confirmation
+            port = request['port']
+            client = zmq.Context.instance().socket(zmq.PUSH)
+            client.connect('{}://{}:{}'.format(ZMQ_TRANSPORT, ZMQ_HOST, port))
+            client.send_pyobj(task_completion_time)
+
+        if self.need_redraw:
+            GLUT.glutPostRedisplay()
+
 
     def init_opengl(self):
         """A general OpenGL initialization function.  Sets all of the initial parameters.
