@@ -97,7 +97,8 @@ if __name__ == '__main__':
               connection_drawing_spec=mp_drawing_styles
               .get_default_face_mesh_iris_connections_style())
         cv2.imwrite(f'{args.output_folder}/media_pipe_view_{i}.png', annotated_image)
-
+        
+        viewer.cast_point(.5, .5)
         # Rotate the mesh back for the next computation
         my_mesh.rotate_vertices(compute_rotation_matrix(math.radians(-i)))
 

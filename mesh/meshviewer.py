@@ -278,6 +278,20 @@ class MeshSubwindow:
     def close(self):
         self.parent_window.p.terminate()
 
+    def cast_point(self, x_point, y_point):
+        """
+        Casts a point from the window into the scene
+        """
+        window_height = GLUT.glutGet(GLUT.GLUT_WINDOW_HEIGHT)
+        depth_value = GL.glReadPixels(x_point, window_height - y_point, 1, 1, GL.GL_DEPTH_COMPONENT, GL.GL_FLOAT)
+        camera = self.on_draw(want_cameras=True)[0]
+        xx, yy, zz = GLU.gluUnProject(
+            cursor_x, window_height - y_point, depth_value,
+            camera['modelview_matrix'],
+            camera['projection_matrix'],
+            camera['viewport'])
+        print(f'Point {xx}, {yy}, {zz}')
+
     background_color = property(fset=set_background_color, doc="Background color, as 3-element numpy array where 0 <= color <= 1.0.")
     dynamic_meshes = property(fset=set_dynamic_meshes, doc="List of meshes for dynamic display.")
     static_meshes = property(fset=set_static_meshes, doc="List of meshes for static display.")
